@@ -50,7 +50,7 @@ void render(driver_state& state, render_type type)
             {
                 output[j].data = vertex_ptr;
                 input.data = vertex_ptr;
-                state.vertex_shader(input, output[i], state.uniform_data);
+                state.vertex_shader(input, output[j], state.uniform_data);
                 vertex_ptr += state.floats_per_vertex;
                 if(j == 2)
                 {
