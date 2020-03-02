@@ -1,5 +1,6 @@
 #include "driver_state.h"
 #include <cstring>
+#include <limits>
 
 driver_state::driver_state()
 {
@@ -23,9 +24,12 @@ void initialize_render(driver_state& state, int width, int height)
     
     // Render the whole image black to start.
     state.image_color = new pixel[width * height];
+    state.image_depth = new float[width * height];
+
     for(size_t i = 0; i < width * height; i++)
     {
         state.image_color[i] = make_pixel(0, 0, 0);
+        state.image_depth[i] = std::numeric_limits<float>::max();
     }
 }
 
@@ -46,7 +50,7 @@ void render(driver_state& state, render_type type)
     {
         case render_type::triangle:
         {
-            for(size_t i = 0, j = 0; i < state.num_vertices; i++, j++) 
+            for(int i = 0, j = 0; i < state.num_vertices; i++, j++) 
             {
                 output[j].data = vertex_ptr;
                 input.data = vertex_ptr;
@@ -97,6 +101,7 @@ void rasterize_triangle(driver_state& state, const data_geometry* in[3])
 {
     int x[3];
     int y[3];
+    int z[3];
 
     int x_min = 0;
     int x_max = 0;
@@ -109,20 +114,22 @@ void rasterize_triangle(driver_state& state, const data_geometry* in[3])
     // Convert coordinates from in[] into NDC coordinates.
     for(int i = 0; i < 3; i++) 
     {
-        int temp_x = static_cast<int>(half_width  * (*in)[i].gl_Position[0] + (half_width  - 0.5));
-        int temp_y = static_cast<int>(half_height * (*in)[i].gl_Position[1] + (half_height - 0.5));
+        int temp_x = static_cast<int>(half_width  * ((*in)[i].gl_Position[0]/(*in)[i].gl_Position[3]) + (half_width  - 0.5f));
+        int temp_y = static_cast<int>(half_height * ((*in)[i].gl_Position[1]/(*in)[i].gl_Position[3]) + (half_height - 0.5f));
+        int temp_z = static_cast<int>(half_width  * ((*in)[i].gl_Position[2]/(*in)[i].gl_Position[3]) + (half_width  - 0.5f));
 
         x[i] = temp_x;
         y[i] = temp_y;
+        z[i] = temp_z;
         
         // Draw vertices.
-        state.image_color[temp_x + temp_y * state.image_width] = make_pixel(255, 255, 255);
+        //state.image_color[temp_x + temp_y * state.image_width] = make_pixel(255, 255, 255);
     }
 
      // Fragment shading
     float* data = new float[MAX_FLOATS_PER_VERTEX];
     data_fragment fragment_data{data};
-    data_output* frag_out = new data_output;
+    data_output frag_out;
 
     // Formula for the area of the triangle.
     float area = (0.5f * ((x[1]*y[2] - x[2]*y[1]) - (x[0]*y[2] - x[2]*y[0]) + (x[0]*y[1] - x[1]*y[0])));
@@ -156,49 +163,72 @@ void rasterize_triangle(driver_state& state, const data_geometry* in[3])
     {
         for(int i = x_min; i < x_max + 1; i++) 
         {
-            float alpha = (0.5f * ((x[1]*y[2] - x[2]*y[1]) + (y[1] - y[2])*i + (x[2] - x[1])*j)) / area;
-            float beta =  (0.5f * ((x[2]*y[0] - x[0]*y[2]) + (y[2] - y[0])*i + (x[0] - x[2])*j)) / area;
-            float gamma = (0.5f * ((x[0]*y[1] - x[1]*y[0]) + (y[0] - y[1])*i + (x[1] - x[0])*j)) / area;
+            float temp_alpha = (0.5f * ((x[1]*y[2] - x[2]*y[1]) + (y[1] - y[2])*i + (x[2] - x[1])*j)) / area;
+            float temp_beta =  (0.5f * ((x[2]*y[0] - x[0]*y[2]) + (y[2] - y[0])*i + (x[0] - x[2])*j)) / area;
+            float temp_gamma = (0.5f * ((x[0]*y[1] - x[1]*y[0]) + (y[0] - y[1])*i + (x[1] - x[0])*j)) / area;
 
             // If the pixel is inside the triangle...
-            if (alpha >= 0 && beta >= 0 && gamma >= 0) 
+            if (temp_alpha >= 0 && temp_beta >= 0 && temp_gamma >= 0) 
             {
+     //           float k_gour = 0;
+                float alpha = temp_alpha;
+                float beta = temp_beta;
+                float gamma = temp_gamma;
 
-                for(int k = 0; k < state.floats_per_vertex; k++)
+                float temp_z = alpha * z[0] + beta * z[1] + gamma * z[2];
+
+                if(temp_z < state.image_depth[i + j * state.image_width])
                 {
-                    switch(state.interp_rules[k])
-                    {
-                        case interp_type::flat:
-                        {
-                            fragment_data.data[k] = in[0]->data[k];
-                            break;
-                        }
-                        case interp_type::smooth:
-                        {
-                
-                            break;
-                        }
-                        case interp_type::noperspective:
-                        {
-                
-                            break;
-                        }
-                        default:
-                        break;      
-                    }
-                }
-               
-                state.fragment_shader(fragment_data, *frag_out, state.uniform_data);
-                state.image_color[i + j * state.image_width] =
-                                     make_pixel(static_cast<int>(frag_out->output_color[0] * 255),
-                                                static_cast<int>(frag_out->output_color[1] * 255),
-                                                static_cast<int>(frag_out->output_color[2] * 255));
+                    state.image_depth[i + j * state.image_width] = temp_z;
 
+                    for(int k = 0; k < state.floats_per_vertex; k++)
+                    {
+                        float k_gour = 0;
+
+                        switch(state.interp_rules[k])
+                        {
+                            case interp_type::flat:
+                            {
+                                fragment_data.data[k] = (*in)[0].data[k];
+                                break;
+                            }
+                            case interp_type::smooth:
+                            {
+                                k_gour = (temp_alpha / (*in)[0].gl_Position[3]) +
+                                         (temp_beta  / (*in)[1].gl_Position[3]) +
+                                         (temp_gamma / (*in)[2].gl_Position[3]);
+
+                                temp_alpha = alpha / (k_gour * (*in)[0].gl_Position[3]);
+                                temp_beta  = beta  / (k_gour * (*in)[1].gl_Position[3]);
+                                temp_gamma = gamma / (k_gour * (*in)[2].gl_Position[3]);
+
+        //                        fragment_data.data[k] = alpha * in[0]->data[k] + beta * in[1]->data[k] +
+          //                                              gamma * in[2]->data[k];
+                                break;
+                            }
+                            case interp_type::noperspective:
+                            {
+                                fragment_data.data[k] = temp_alpha * (*in)[0].data[k] + 
+                                                        temp_beta  * (*in)[1].data[k] + 
+                                                        temp_gamma * (*in)[2].data[k];
+                                break;
+                            }
+                            default:
+                           break;      
+                        }
+                    }
+               
+                    state.fragment_shader(fragment_data, frag_out, state.uniform_data);
+                    state.image_color[i + j * state.image_width] =
+                                     make_pixel(static_cast<int>(frag_out.output_color[0] * 255),
+                                                static_cast<int>(frag_out.output_color[1] * 255),
+                                                static_cast<int>(frag_out.output_color[2] * 255));
+
+                }
             }
         }
     }
 
     delete [] data;
-    delete frag_out;
-
+    //delete frag_out;
 }
